@@ -1,6 +1,6 @@
 {
   "name": "@audio/mic",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Capture audio from microphone in browser/node",
   "type": "module",
   "main": "./index.js",
@@ -36,6 +36,7 @@
     "src/",
     "prebuilds/"
   ],
+  "gypfile": false,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/audiojs/mic.git"

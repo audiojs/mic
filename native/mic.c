@@ -20,6 +20,7 @@
 
 #include <node_api.h>
 #include <string.h>
+#include "devices.h"
 
 #define NAPI_CALL(env, call)                                          \
   do {                                                                \
@@ -93,14 +94,14 @@ static void mic_destructor(napi_env env, void* data, void* hint) {
   (void)hint;
 }
 
-/* mic_open(sampleRate, channels, bitDepth, bufferMs) → external */
+/* mic_open(sampleRate, channels, bitDepth[, bufferMs, device]) → external; device: an id or a name from devices() */
 static napi_value mic_open(napi_env env, napi_callback_info info) {
-  size_t argc = 4;
-  napi_value argv[4];
+  size_t argc = 5;
+  napi_value argv[5];
   NAPI_CALL(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
 
   if (argc < 3) {
-    napi_throw_error(env, NULL, "mic_open requires (sampleRate, channels, bitDepth[, bufferMs])");
+    napi_throw_error(env, NULL, "mic_open requires (sampleRate, channels, bitDepth[, bufferMs, device])");
     return NULL;
   }
 
@@ -113,6 +114,10 @@ static napi_value mic_open(napi_env env, napi_callback_info info) {
   if (argc > 3) NAPI_CALL(env, napi_get_value_uint32(env, argv[3], &buffer_ms));
   if (buffer_ms < 10) buffer_ms = 10;
   if (buffer_ms > 2000) buffer_ms = 2000;
+
+  ma_device_id id;
+  int chosen = device_arg(env, argc, argv, 4, ma_device_type_capture, &id);
+  if (chosen < 0) return NULL;
 
   ma_format format;
   switch (bit_depth) {
@@ -151,6 +156,7 @@ static napi_value mic_open(napi_env env, napi_callback_info info) {
   ma_device_config config = ma_device_config_init(ma_device_type_capture);
   config.capture.format = format;
   config.capture.channels = channels;
+  if (chosen) config.capture.pDeviceID = &id;
   config.sampleRate = sample_rate;
   config.dataCallback = capture_callback;
   config.pUserData = mic;
@@ -331,15 +337,21 @@ static napi_value mic_close(napi_env env, napi_callback_info info) {
   return NULL;
 }
 
+/* devices() → [{ id, name, default }]: the inputs */
+static napi_value mic_devices(napi_env env, napi_callback_info info) {
+  return device_array(env, ma_device_type_capture);
+}
+
 /* Module init */
 static napi_value init(napi_env env, napi_value exports) {
   napi_property_descriptor props[] = {
+    { "devices",   NULL, mic_devices,    NULL, NULL, NULL, napi_default, NULL },
     { "open",      NULL, mic_open,       NULL, NULL, NULL, napi_default, NULL },
     { "readSync",  NULL, mic_read_sync,  NULL, NULL, NULL, napi_default, NULL },
     { "readAsync", NULL, mic_read_async, NULL, NULL, NULL, napi_default, NULL },
     { "close",     NULL, mic_close,      NULL, NULL, NULL, napi_default, NULL },
   };
-  NAPI_CALL(env, napi_define_properties(env, exports, 4, props));
+  NAPI_CALL(env, napi_define_properties(env, exports, 5, props));
   return exports;
 }
 

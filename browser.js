@@ -6,6 +6,13 @@
  *
  * Note: unlike node, browser mic() is async because getUserMedia requires permission.
  */
+
+/** The inputs: [{ id, name, default }] (names show once the page has been allowed the microphone) */
+export async function devices() {
+  return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput')
+    .map(d => ({ id: d.deviceId, name: d.label, default: d.deviceId === 'default' }))
+}
+
 export default async function mic(opts = {}) {
   const channels = opts.channels || 1
   const sampleRate = opts.sampleRate || 44100
@@ -19,6 +26,12 @@ export default async function mic(opts = {}) {
       noiseSuppression: opts.noiseSuppression ?? false,
       autoGainControl: opts.autoGainControl ?? false,
     }
+  }
+  // a device by its id, or by its name as enumerateDevices gives it
+  if (opts.device) {
+    let all = await devices(), d = String(opts.device).toLowerCase()
+    let hit = all.find(x => x.id === opts.device || x.name === opts.device) ?? (m => m.length === 1 ? m[0] : null)(all.filter(x => x.name.toLowerCase().includes(d)))
+    constraints.audio.deviceId = { exact: hit?.id ?? opts.device }
   }
 
   const stream = await navigator.mediaDevices.getUserMedia(constraints)

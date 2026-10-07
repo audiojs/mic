@@ -57,6 +57,28 @@ test('double close is safe', async () => {
   read.close() // second close — should not throw
 })
 
+// --- devices ---
+
+test('devices: the inputs, each with its id and name, one the default; a device by name or part of it', { skip: isBrowser && 'browser: names need permission' }, async () => {
+  const { devices, pick } = await import('./index.js')
+  const all = await devices()
+  ok(Array.isArray(all), `${all.length} inputs`)
+  for (const d of all) ok(typeof d.id === 'string' && typeof d.name === 'string' && typeof d.default === 'boolean', `${d.name} (${d.id})`)
+  ok(all.length === 0 || all.filter(d => d.default).length <= 1, 'at most one default')
+  const fake = [{ id: 'a1', name: 'Built-in Microphone', default: true }, { id: 'b2', name: 'USB Audio CODEC', default: false }]
+  is(pick(fake, 'b2'), 'b2', 'by id')
+  is(pick(fake, 'Built-in Microphone'), 'a1', 'by name')
+  is(pick(fake, 'usb'), 'b2', 'by part of its name, any case')
+  is(pick(fake, 'o'), 'o', 'two hold it: as given, for the backend to refuse')
+  if (!all.length) return
+  const read = open({ device: all.at(-1).name })
+  const chunks = await capture(read, 2)
+  ok(chunks[0].length > 0, `captured from ${all.at(-1).name}`)
+  let threw = null
+  try { open({ device: 'no such device ' + Math.random() }) } catch (e) { threw = e }
+  is(threw?.code, 'ENODEVICE', 'an unknown device: an error, not another device')
+})
+
 // --- formats ---
 
 test('mono', async () => {

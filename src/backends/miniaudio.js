@@ -6,10 +6,10 @@
  * - Callback fires with each captured chunk — true push from hardware
  *
  * Load order:
- * 1. @audio/mic-{platform}-{arch} (platform package)
- * 2. packages/mic-{platform}-{arch}/
- * 3. prebuilds/{platform}-{arch}/
- * 4. build/Release/ or build/Debug/ (local node-gyp)
+ * 1. build/Release/ or build/Debug/ (a local node-gyp build: a clone's own, newer than any prebuilt; never published)
+ * 2. @audio/mic-{platform}-{arch} (platform package)
+ * 3. packages/mic-{platform}-{arch}/
+ * 4. prebuilds/{platform}-{arch}/
  */
 import { createRequire } from 'node:module'
 import { join, dirname } from 'node:path'
@@ -22,20 +22,25 @@ const plat = `${platform()}-${arch()}`
 
 let addon
 const loaders = [
+  () => require(join(root, 'build', 'Release', 'mic.node')),
+  () => require(join(root, 'build', 'Debug', 'mic.node')),
   () => require(`@audio/mic-${plat}`),
   () => require(join(root, 'packages', `mic-${plat}`, 'mic.node')),
   () => require(join(root, 'prebuilds', plat, 'audio-mic.node')),
   () => require(join(root, 'prebuilds', plat, 'mic.node')),
-  () => require(join(root, 'build', 'Release', 'mic.node')),
-  () => require(join(root, 'build', 'Debug', 'mic.node')),
 ]
 for (const load of loaders) {
   try { addon = load(); break } catch {}
 }
 if (!addon) throw new Error('miniaudio addon not found — install @audio/mic-' + plat + ' or run npm run build')
 
-export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, bufferSize = 50 } = {}) {
-  const handle = addon.open(sampleRate, channels, bitDepth, bufferSize)
+/** The inputs: [{ id, name, default }], ids the platform's own (CoreAudio's UID, WASAPI's endpoint id, ALSA's name) */
+export const devices = () => addon.devices?.() ?? []
+
+export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, bufferSize = 50, device = '' } = {}) {
+  // an addon from before devices could be chosen would open the default one: say so instead
+  if (device && !addon.devices) throw Object.assign(new Error(`@audio/mic-${plat} predates choosing a device: update it`), { code: 'ENODEVICE' })
+  const handle = addon.open(sampleRate, channels, bitDepth, bufferSize, device)
   const bpf = channels * (bitDepth / 8)
 
   return {

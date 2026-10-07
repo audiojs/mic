@@ -34,6 +34,19 @@ for await (let chunk of read) {
 }
 ```
 
+### Devices
+
+```js
+import mic, { devices } from '@audio/mic'
+
+await devices()
+// [{ id: 'BuiltInMicrophoneDevice', name: 'MacBook Pro Microphone', default: true }, …]
+
+let read = mic({ device: 'USB' })   // by id, by name, or by part of its name when only one holds it
+```
+
+Ids are the platform's own: CoreAudio's UID, WASAPI's endpoint id, the ALSA or PulseAudio name. A device that isn't there is an error (`code: 'ENODEVICE'`), never another device. In the browser, `devices()` reads `enumerateDevices()` (names show once the page may use the microphone) and `device` becomes the `deviceId` getUserMedia asks for.
+
 ### Node Readable
 
 ```js
@@ -63,6 +76,7 @@ Returns a source function. Options:
 - `channels` — default `1`
 - `bitDepth` — `8`, `16` (default), `24`, `32`
 - `bufferSize` — ring buffer in ms, default `50`
+- `device` — an input by id or name (`devices()`), default the system's
 - `backend` — force a specific backend
 
 ### `read(cb)`

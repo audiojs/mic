@@ -3,6 +3,9 @@
  * Maintains timing contract: callback fires after audio duration,
  * delivering silence buffers at real-time rate.
  */
+/** No devices: silence stands in for one */
+export const devices = () => []
+
 export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, bufferSize = 50 } = {}) {
   const bpf = channels * (bitDepth / 8)
   const chunkFrames = Math.round(sampleRate * bufferSize / 1000)

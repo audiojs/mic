@@ -1,6 +1,6 @@
 {
   "name": "@audio/mic-darwin-x64",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "audio-mic native addon for macOS x64",
   "os": [
     "darwin"

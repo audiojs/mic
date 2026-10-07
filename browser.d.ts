@@ -6,7 +6,14 @@ export interface BrowserMicOptions {
   echoCancellation?: boolean
   noiseSuppression?: boolean
   autoGainControl?: boolean
+  /** an input by its id or name (from devices()), else the one whose name holds it */
+  device?: string
 }
+
+export interface Device { id: string, name: string, default: boolean }
+
+/** The inputs (names show once the page has been allowed the microphone) */
+export function devices(): Promise<Device[]>
 
 export interface ReadFn {
   (cb: (err: Error | null, chunk?: Uint8Array | null) => void): void

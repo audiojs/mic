@@ -6,6 +6,7 @@
  *
  * Note: unlike node, browser mic() is async because getUserMedia requires permission.
  */
+import queue, { iterator, overflow } from './src/queue.js'
 
 /** The inputs: [{ id, name, default }] (names show once the page has been allowed the microphone) */
 export async function devices() {
@@ -17,6 +18,7 @@ export default async function mic(opts = {}) {
   const channels = opts.channels || 1
   const sampleRate = opts.sampleRate || 44100
   const bitDepth = opts.bitDepth || 16
+  const backlog = opts.backlog ?? 10000
 
   const constraints = {
     audio: {
@@ -40,8 +42,9 @@ export default async function mic(opts = {}) {
   const ctx = opts.context || new AudioContext({ sampleRate })
   const source = ctx.createMediaStreamSource(stream)
 
+  // what is captured waits here until read: a read takes all of it, so a slow reader loses none
+  const q = queue(backlog * ctx.sampleRate * channels * bitDepth / 8000)
   let closed = false
-  let pending = null
 
   // try AudioWorklet, fall back to ScriptProcessor
   let node
@@ -75,10 +78,7 @@ export default async function mic(opts = {}) {
     source.connect(node)
 
     node.port.onmessage = (e) => {
-      if (closed || !pending) return
-      const cb = pending
-      pending = null
-      cb(null, float32ToPCM(e.data, bitDepth))
+      if (!closed && !q.push(float32ToPCM(e.data, bitDepth))) close(overflow(backlog))
     }
   } else {
     // ScriptProcessorNode fallback (deprecated but wider support)
@@ -88,48 +88,35 @@ export default async function mic(opts = {}) {
     node.connect(ctx.destination) // required for processing to run
 
     node.onaudioprocess = (e) => {
-      if (closed || !pending) return
-      const cb = pending
-      pending = null
+      if (closed) return
       const chans = []
       for (let i = 0; i < channels; i++) chans.push(e.inputBuffer.getChannelData(i).slice())
-      cb(null, float32ToPCM(chans, bitDepth))
+      if (!q.push(float32ToPCM(chans, bitDepth))) close(overflow(backlog))
     }
   }
 
-  read.close = close
-  read.end = close
+  read.close = () => close()
+  read.end = () => close()
   read.backend = 'mediastream'
-  read[Symbol.asyncIterator] = () => ({
-    next: () => new Promise((resolve) => {
-      if (closed) return resolve({ done: true, value: undefined })
-      if (ctx.state === 'suspended') ctx.resume()
-      pending = (err, chunk) => {
-        if (err || !chunk) return resolve({ done: true, value: undefined })
-        resolve({ done: false, value: chunk })
-      }
-    })
-  })
+  read[Symbol.asyncIterator] = iterator(read)
 
   return read
 
   function read(cb) {
-    if (cb == null || closed) {
-      close()
-      return
-    }
+    if (cb == null) return close()
     // resume suspended context (autoplay policy)
-    if (ctx.state === 'suspended') ctx.resume()
-    pending = cb
+    if (!closed && ctx.state === 'suspended') ctx.resume()
+    q.read(cb)
   }
 
-  function close() {
+  // capture stops; what was captured still reads, then err if any, then the end
+  function close(err) {
     if (closed) return
     closed = true
-    pending = null
     source.disconnect()
     stream.getTracks().forEach(t => t.stop())
     if (ownCtx) ctx.close?.()
+    q.end(err)
   }
 
   function float32ToPCM(channelData, bits) {

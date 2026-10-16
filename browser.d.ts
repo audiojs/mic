@@ -6,6 +6,8 @@ export interface BrowserMicOptions {
   echoCancellation?: boolean
   noiseSuppression?: boolean
   autoGainControl?: boolean
+  /** the most audio held unread, in ms (default 10000): past it capture stops; what was held still reads, then an EOVERFLOW error, then the end */
+  backlog?: number
   /** an input by its id or name (from devices()), else the one whose name holds it */
   device?: string
 }

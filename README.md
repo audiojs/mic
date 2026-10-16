@@ -13,7 +13,8 @@ let read = mic({
   sampleRate: 44100,
   channels: 1,
   bitDepth: 16,
-  // bufferSize: 50,       // ring buffer ms (default 50)
+  // bufferSize: 50,       // the most one block holds, ms (default 50)
+  // backlog: 10000,       // the most held unread, ms (default 10000)
   // backend: 'miniaudio', // force backend
 })
 
@@ -33,6 +34,8 @@ for await (let chunk of read) {
   // process PCM chunk
 }
 ```
+
+A `break` out of the loop stops capture. An overflow (see [`read(cb)`](#readcb)) is thrown.
 
 ### Devices
 
@@ -75,7 +78,8 @@ Returns a source function. Options:
 - `sampleRate` — default `44100`
 - `channels` — default `1`
 - `bitDepth` — `8`, `16` (default), `24`, `32`
-- `bufferSize` — ring buffer in ms, default `50`
+- `bufferSize` — the most one block from the device holds, in ms, default `50`
+- `backlog` – the most audio held unread, in ms, default `10000` (see [`read(cb)`](#readcb))
 - `device` — an input by id or name (`devices()`), default the system's
 - `backend` — force a specific backend
 
@@ -83,9 +87,11 @@ Returns a source function. Options:
 
 Read PCM data. Callback fires with each captured chunk: `(err, buffer) => {}`.
 
+Capture doesn't wait for reads: what comes between them is held, and the next read takes all of it in one buffer, so a reader that takes its time loses nothing. Past `backlog` held unread, capture stops: what was held still reads, then an error with `code: 'EOVERFLOW'`, then the end (`null`). In node the device's own ring holds what comes while the event loop is busy, `backlog`'s worth up to 2 s, and overflows the same way.
+
 ### `read(null)`
 
-Stop capture. Closes the audio device.
+Stop capture. Closes the audio device. What was captured before it still reads, then `null`.
 
 ### `read.close()`
 

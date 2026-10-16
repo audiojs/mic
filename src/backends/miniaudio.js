@@ -37,17 +37,19 @@ if (!addon) throw new Error('miniaudio addon not found — install @audio/mic-' 
 /** The inputs: [{ id, name, default }], ids the platform's own (CoreAudio's UID, WASAPI's endpoint id, ALSA's name) */
 export const devices = () => addon.devices?.() ?? []
 
-export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, bufferSize = 50, device = '' } = {}) {
+export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, bufferSize = 50, backlog = 10000, device = '' } = {}) {
   // an addon from before devices could be chosen would open the default one: say so instead
   if (device && !addon.devices) throw Object.assign(new Error(`@audio/mic-${plat} predates choosing a device: update it`), { code: 'ENODEVICE' })
-  const handle = addon.open(sampleRate, channels, bitDepth, bufferSize, device)
+  // the ring holds what comes while the event loop is held: backlog's worth, up to the addon's cap of 2 s; a read takes at most bufferSize
+  const handle = addon.open(sampleRate, channels, bitDepth, Math.max(bufferSize, Math.min(backlog, 2000)), device)
   const bpf = channels * (bitDepth / 8)
 
   return {
     read(cb) {
       const buf = Buffer.alloc(Math.round(sampleRate * bufferSize / 1000) * bpf)
       addon.readAsync(handle, buf, (err, frames) => {
-        if (frames > 0) cb?.(err, buf.subarray(0, frames * bpf))
+        // a block of its own size: held unread, it keeps no more memory than it carries
+        if (frames > 0) cb?.(err, Buffer.from(buf.subarray(0, frames * bpf)))
         else cb?.(err, null)
       })
     },

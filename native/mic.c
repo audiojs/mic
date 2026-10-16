@@ -44,6 +44,7 @@ typedef struct {
   ma_format format;
   int started;
   volatile int closed;
+  ma_uint32 overflow;  /* the ring was full: from then on nothing is kept, so what it holds stays contiguous */
 } mic_t;
 
 /* Async read work */
@@ -52,15 +53,17 @@ typedef struct {
   void* data;
   size_t byte_length;
   ma_uint32 frames_read;
+  int overflow;
   napi_async_work work;
   napi_ref callback_ref;
   napi_ref buffer_ref;
 } read_work_t;
 
-/* Capture callback — pushes into ring buffer */
+/* Capture callback — pushes into ring buffer; a full ring is an overflow, reported once what it holds is read */
 static void capture_callback(ma_device* device, void* output, const void* input, ma_uint32 frame_count) {
   mic_t* mic = (mic_t*)device->pUserData;
   ma_uint32 bpf = ma_get_bytes_per_frame(mic->format, mic->channels);
+  if (ma_atomic_load_32(&mic->overflow)) return;
 
   ma_uint32 total_written = 0;
   while (total_written < frame_count) {
@@ -71,6 +74,7 @@ static void capture_callback(ma_device* device, void* output, const void* input,
     ma_pcm_rb_commit_write(&mic->ring_buffer, to_write);
     total_written += to_write;
   }
+  if (total_written < frame_count) ma_atomic_store_32(&mic->overflow, 1);
 
   (void)output;
 }
@@ -247,6 +251,8 @@ static void read_execute(napi_env env, void* data) {
    * Read whatever is available once data arrives — don't wait to fill the whole buffer.
    * This gives lowest latency: callback fires as soon as any data is captured. */
   while (frames_read == 0 && !mic->closed) {
+    /* the flag before the ring: once set, nothing more is written, so the ring empty then means the overflow is next */
+    ma_uint32 over = ma_atomic_load_32(&mic->overflow);
     ma_uint32 to_read = max_frames - frames_read;
     void* read_buf;
     ma_result res = ma_pcm_rb_acquire_read(&mic->ring_buffer, &to_read, &read_buf);
@@ -254,6 +260,9 @@ static void read_execute(napi_env env, void* data) {
       memcpy((ma_uint8*)w->data + frames_read * bpf, read_buf, to_read * bpf);
       ma_pcm_rb_commit_read(&mic->ring_buffer, to_read);
       frames_read += to_read;
+    } else if (over) {
+      w->overflow = 1;
+      break;
     } else {
       ma_sleep(1);
     }
@@ -270,7 +279,14 @@ static void read_complete(napi_env env, napi_status status, void* data) {
   napi_get_reference_value(env, w->callback_ref, &callback);
   napi_get_global(env, &global);
 
-  napi_get_null(env, &argv[0]);
+  if (w->overflow) {
+    napi_value code, msg;
+    napi_create_string_utf8(env, "EOVERFLOW", NAPI_AUTO_LENGTH, &code);
+    napi_create_string_utf8(env, "mic: the event loop was held longer than the device ring holds; capture stopped", NAPI_AUTO_LENGTH, &msg);
+    napi_create_error(env, code, msg, &argv[0]);
+  } else {
+    napi_get_null(env, &argv[0]);
+  }
   napi_create_uint32(env, w->frames_read, &argv[1]);
   napi_call_function(env, global, callback, 2, argv, NULL);
 

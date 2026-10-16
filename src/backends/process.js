@@ -43,15 +43,22 @@ export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, device }
   let closed = false
   let pending = null
 
-  proc.on('close', () => { closed = true })
-
-  proc.stdout.on('data', (chunk) => {
-    if (pending) {
-      const cb = pending
-      pending = null
-      cb(null, chunk)
-    }
+  // the recorder gone on its own: a read waiting is told, not left hanging
+  proc.on('close', () => {
+    closed = true
+    const cb = pending
+    pending = null
+    cb?.(new Error('Process exited'), null)
   })
+
+  // flowing only while a read waits: paused, the pipe holds what comes next, none dropped
+  proc.stdout.on('data', (chunk) => {
+    const cb = pending
+    pending = null
+    proc.stdout.pause()
+    cb(null, chunk)
+  })
+  proc.stdout.pause()
 
   proc.stdout.on('error', () => {})
 
@@ -59,6 +66,7 @@ export function open({ sampleRate = 44100, channels = 1, bitDepth = 16, device }
     read(cb) {
       if (closed) return cb?.(new Error('Process exited'), null)
       pending = cb
+      proc.stdout.resume()
     },
 
     close() {

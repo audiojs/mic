@@ -7,12 +7,14 @@
  * read(null) // stop
  */
 import { open, devices as list } from './src/backend.js'
+import queue, { iterator, overflow } from './src/queue.js'
 
 const defaults = {
   sampleRate: 44100,
   channels: 1,
   bitDepth: 16,
-  bufferSize: 50
+  bufferSize: 50,
+  backlog: 10000
 }
 
 /** The inputs: [{ id, name, default }] */
@@ -30,27 +32,40 @@ export default function mic(opts) {
   const config = { ...defaults, ...opts }
   if (config.device != null) config.device = pick(list(config.backend), config.device)
   const { name, device } = open(config, config.backend)
+  const { sampleRate, channels, bitDepth, backlog } = config
 
-  read.close = () => { device.close() }
-  read.end = () => { device.close() }
+  // what is captured waits here until read; the device is read all the time, so a slow reader loses none
+  const q = queue(backlog * sampleRate * channels * bitDepth / 8000, Buffer.concat)
+  let closed = false
+  pump()
+
+  read.close = () => stop()
+  read.end = () => stop()
   read.backend = name
-  read[Symbol.asyncIterator] = () => ({
-    next: () => new Promise((resolve, reject) => {
-      device.read((err, chunk) => {
-        if (err) return reject(err)
-        if (!chunk) return resolve({ done: true, value: undefined })
-        resolve({ done: false, value: chunk })
-      })
-    })
-  })
+  read[Symbol.asyncIterator] = iterator(read)
 
   return read
 
   function read(cb) {
-    if (cb == null) {
-      device.close()
-      return
-    }
-    device.read(cb)
+    if (cb == null) return stop()
+    q.read(cb)
+  }
+
+  // the device's next block into the queue, then the one after, while capture lasts
+  function pump() {
+    device.read((err, chunk) => {
+      if (closed) return
+      if (err || !chunk) return stop(err)
+      if (!q.push(chunk)) return stop(overflow(backlog))
+      if (!closed) pump()
+    })
+  }
+
+  // capture stops; what was captured still reads, then err if any, then the end
+  function stop(err) {
+    if (closed) return
+    closed = true
+    device.close()
+    q.end(err)
   }
 }

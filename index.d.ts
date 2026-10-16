@@ -2,7 +2,10 @@ export interface MicOptions {
   sampleRate?: number
   channels?: number
   bitDepth?: 8 | 16 | 24 | 32
+  /** the most one block from the device holds, in ms (default 50) */
   bufferSize?: number
+  /** the most audio held unread, in ms (default 10000): past it capture stops; what was held still reads, then an EOVERFLOW error, then the end */
+  backlog?: number
   backend?: 'miniaudio' | 'process' | 'null'
   /** an input by its id or name (from devices()), else the one whose name holds it (any case); none: the default */
   device?: string

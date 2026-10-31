@@ -380,7 +380,8 @@ if (!isBrowser) {
     const mid = take.status(), head = wav(path)
     ok(mid.frames > 0 && !mid.done && !mid.error, `${mid.seconds.toFixed(2)} s written while recording`)
     is(mid.peaks.length, take.channels, 'a peak for each input')
-    ok(head.data > 0 && head.data <= head.size - head.at, `the header already tells ${head.data} bytes`)
+    // a second of audio written, the header tells it: a runner short of real time may not have that second yet
+    ok(head.data <= head.size - head.at && (isCI || head.data > 0), `the header already tells ${head.data} bytes`)
     const end = await take.stop()
     ok(end.done && !end.error && end.silenced === 0, 'stopped: done, nothing lost')
     // shared CI runners can't keep a device's real time (macos-18 measured 0.06x): the length checked on a machine of one's own
@@ -469,7 +470,7 @@ if (!isBrowser) {
     p.kill('SIGKILL')
     await new Promise(r => p.once('exit', r))
     const w = wav(path), held = w.size - w.at, second = w.rate * w.block
-    ok(w.data > 0 && w.data <= held && held - w.data <= 1.3 * second, `the header: ${(w.data / second).toFixed(2)} s of the ${(held / second).toFixed(2)} s there`)
+    ok(w.data <= held && held - w.data <= 1.3 * second && (isCI || w.data > 0), `the header: ${(w.data / second).toFixed(2)} s of the ${(held / second).toFixed(2)} s there`)
     const { frames, before } = recover(path), r = wav(path)
     is(before, w.data / w.block, 'recover: what the header told')
     is([frames, r.data, r.riff + 8], [Math.floor(held / w.block), frames * w.block, r.size], 'recover: every whole frame there')

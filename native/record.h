@@ -498,7 +498,9 @@ static napi_value rec_open(napi_env env, napi_callback_info info) {
   config.dataCallback = rec_callback;
   config.notificationCallback = rec_notify;
   config.pUserData = r;
-  config.performanceProfile = ma_performance_profile_conservative;   /* nobody listens: larger periods, fewer chances to miss one */
+  /* 20 ms periods: what is written reaches read() as it comes (a page draws the take smoothly, starts it at once), while
+   * the 20 s ring between the device and the disk keeps the take safe from a slow disk */
+  config.periodSizeInMilliseconds = 20;
   if (ma_device_init(NULL, &config, &r->device) != MA_SUCCESS) { rec_free(r); return rec_throw(env, "EDEVICE", "record: the input device would not open"); }
   r->stopped = 0;
   r->in_ch = r->device.capture.channels;

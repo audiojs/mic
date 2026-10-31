@@ -389,6 +389,7 @@ static napi_value init(napi_env env, napi_value exports) {
     { "recordInfo",   NULL, rec_info,   NULL, NULL, NULL, napi_default, NULL },
     { "recordStatus", NULL, rec_status, NULL, NULL, NULL, napi_default, NULL },
     { "recordStop",   NULL, rec_stop,   NULL, NULL, NULL, napi_default, NULL },
+    { "recordRead",   NULL, rec_read,   NULL, NULL, NULL, napi_default, NULL },
   };
   NAPI_CALL(env, napi_define_properties(env, exports, sizeof props / sizeof *props, props));
   return exports;

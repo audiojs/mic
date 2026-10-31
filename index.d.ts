@@ -56,6 +56,8 @@ export interface RecordStatus {
   clips: number[]
   /** frames lost to a full ring, written as silence where they were */
   silenced: number
+  /** frames read() missed, its reader more than 2 s behind (the file has them) */
+  missed: number
   /** seconds since the device last gave audio */
   stalled: number
   /** times the system moved its default input elsewhere */
@@ -77,6 +79,9 @@ export interface Take {
   bitDepth: number
   files: { path: string, channels: number[] }[]
   status(): RecordStatus
+  /** the audio written since the last read, interleaved: the first file's channels, or every channel with no file; a
+   *  reader more than 2 s behind misses audio here (RecordStatus.missed), never in the file */
+  read(): Float32Array
   stop(): Promise<RecordStatus>
 }
 

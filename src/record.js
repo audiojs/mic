@@ -31,6 +31,8 @@ export function record(addon, to, { channels, sampleRate = 0, bitDepth = 24, rin
     bitDepth,
     files: files.map(f => ({ path: f.path, channels: (f.channels ?? [0, 1].slice(0, Math.min(2, info.channels))).map(c => c + 1) })),
     status: () => seconds(addon.recordStatus(handle)),
+    // the audio written since the last read, interleaved: the first file's channels, or every channel with no file
+    read: () => addon.recordRead ? addon.recordRead(handle) : new Float32Array(0),
     stop: () => stopped ??= addon.recordStop(handle).then(seconds)
   }
 }

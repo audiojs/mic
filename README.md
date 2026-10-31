@@ -56,7 +56,8 @@ Ids are the platform's own: CoreAudio's UID, WASAPI's endpoint id, the ALSA or P
 import { record } from '@audio/mic'
 
 let take = record('take.wav', { device: 'Scarlett', channels: [1, 2] })   // inputs from 1, as the interface labels them
-take.status()          // { seconds, peaks, clips, silenced, stalled, rerouted, done, error }: peaks since the last call
+take.status()          // { seconds, peaks, clips, silenced, stalled, rerouted, missed, done, error }: peaks since the last call
+take.read()            // Float32Array: the audio written since the last read, interleaved, to draw or hear it as it comes
 await take.stop()      // the same, once the file is closed
 
 // several files from one device, one clock: tracks of one take, sample for sample together

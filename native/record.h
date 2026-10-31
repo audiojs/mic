@@ -13,6 +13,10 @@
  * time, and counted; a device that stops (unplugged) ends the take, written to its last frame, with EDEVICELOST; time
  * without frames from the device reads as `stalled`.
  *
+ * What is written can be heard too, as it is written: read() hands JS the take's audio (the first file's channels, or
+ * every channel with no file) from a ring of its own, 2 s, for a page to draw it or play it back. A reader that falls
+ * behind misses audio there (counted, `missed`), never in the file.
+ *
  * Include after miniaudio.h (its implementation: threads, sleep), node_api.h, devices.h and NAPI_CALL.
  */
 
@@ -62,8 +66,13 @@ typedef struct rec_t {
   ma_uint32 rng;
   int stopped, threaded, failed, hooked;
   ma_uint8* out;
+  ma_pcm_rb tap;             /* what read() hands JS: the first file's channels, or every channel */
+  ma_uint32 tap_ch;
+  ma_uint32* tap_map;
+  float* tap_buf;
+  int tapped;
   /* under lock */
-  ma_uint64 frames, silenced;
+  ma_uint64 frames, silenced, missed;
   ma_uint32 stalled_ms;
   float* peak;               /* per device channel, since the last status */
   ma_uint64* clips;          /* per device channel, all along */
@@ -244,7 +253,25 @@ static float rec_dither(rec_t* r) {
 }
 
 /* n frames (n ≤ REC_BLOCK) of the device's float, null for silence, to every file */
+/* n frames (silence for null) to the ring read() reads; past its room, missed */
+static void rec_tap(rec_t* r, const float* in, ma_uint32 n) {
+  if (!r->tapped) return;
+  for (ma_uint32 i = 0; i < n; i++)
+    for (ma_uint32 c = 0; c < r->tap_ch; c++) r->tap_buf[(size_t)i * r->tap_ch + c] = in ? in[(size_t)i * r->in_ch + r->tap_map[c]] : 0.0f;
+  ma_uint32 done = 0;
+  while (done < n) {
+    ma_uint32 k = n - done;
+    void* buf;
+    if (ma_pcm_rb_acquire_write(&r->tap, &k, &buf) != MA_SUCCESS || !k) break;
+    memcpy(buf, r->tap_buf + (size_t)done * r->tap_ch, (size_t)k * r->tap_ch * sizeof(float));
+    ma_pcm_rb_commit_write(&r->tap, k);
+    done += k;
+  }
+  if (done < n) { ma_mutex_lock(&r->lock); r->missed += n - done; ma_mutex_unlock(&r->lock); }
+}
+
 static void rec_put(rec_t* r, const float* in, ma_uint32 n) {
+  rec_tap(r, in, n);
   if (in) {
     ma_mutex_lock(&r->lock);
     for (ma_uint32 c = 0; c < r->in_ch; c++) {
@@ -397,6 +424,8 @@ static void rec_free(rec_t* r) {
   for (ma_uint32 i = 0; i < r->nfiles; i++) free(r->files[i].map), free(r->files[i].path);
   free(r->files), free(r->peak), free(r->clips), free(r->out);
   ma_pcm_rb_uninit(&r->rb);
+  if (r->tapped) ma_pcm_rb_uninit(&r->tap);
+  free(r->tap_map), free(r->tap_buf);
   ma_mutex_uninit(&r->lock), ma_mutex_uninit(&r->once);
   free(r);
 }
@@ -514,6 +543,12 @@ static napi_value rec_open(napi_env env, napi_callback_info info) {
     ma_uint32 widest = 0;
     for (ma_uint32 i = 0; i < nfiles; i++) if (r->files[i].nch > widest) widest = r->files[i].nch;
     r->out = (ma_uint8*)malloc((size_t)REC_BLOCK * (widest ? widest : 1) * 4);   /* no file: the levels alone */
+    /* read()'s ring: the first file's channels, or every channel */
+    r->tap_ch = nfiles ? r->files[0].nch : r->in_ch;
+    r->tap_map = (ma_uint32*)malloc(r->tap_ch * sizeof(ma_uint32));
+    r->tap_buf = (float*)malloc((size_t)REC_BLOCK * r->tap_ch * sizeof(float));
+    if (r->tap_map) for (ma_uint32 c = 0; c < r->tap_ch; c++) r->tap_map[c] = nfiles ? r->files[0].map[c] : c;
+    r->tapped = r->tap_map && r->tap_buf && ma_pcm_rb_init(ma_format_f32, r->tap_ch, r->rate * 2, NULL, NULL, &r->tap) == MA_SUCCESS;
     if (!r->peak || !r->clips || !r->out || ma_pcm_rb_init(ma_format_f32, r->in_ch, ring, NULL, NULL, &r->rb) != MA_SUCCESS)
       err_code = "ENOMEM", snprintf(err, sizeof err, "record: no memory for %u s of %u channels", ring / r->rate, r->in_ch);
   }
@@ -588,6 +623,7 @@ static napi_value rec_status_value(napi_env env, rec_t* r) {
   rec_set_num(env, obj, "silenced", (double)r->silenced);
   rec_set_num(env, obj, "stalled", r->stalled_ms / 1000.0);
   rec_set_num(env, obj, "rerouted", ma_atomic_load_32(&r->rerouted));
+  rec_set_num(env, obj, "missed", (double)r->missed);
   napi_get_boolean(env, r->done, &v);
   napi_set_named_property(env, obj, "done", v);
   if (r->code) {
@@ -611,6 +647,29 @@ static napi_value rec_status(napi_env env, napi_callback_info info) {
   rec_t* r;
   NAPI_CALL(env, napi_get_value_external(env, argv[0], (void**)&r));
   return rec_status_value(env, r);
+}
+
+/* recordRead(handle) → Float32Array: the audio written since the last read, interleaved (the first file's channels, or
+ * every channel) */
+static napi_value rec_read(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1], buffer, out;
+  NAPI_CALL(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  rec_t* r;
+  NAPI_CALL(env, napi_get_value_external(env, argv[0], (void**)&r));
+  ma_uint32 n = r->tapped ? ma_pcm_rb_available_read(&r->tap) : 0;
+  float* data;
+  NAPI_CALL(env, napi_create_arraybuffer(env, (size_t)n * r->tap_ch * sizeof(float), (void**)&data, &buffer));
+  for (ma_uint32 got = 0; got < n;) {
+    ma_uint32 k = n - got;
+    void* buf;
+    if (ma_pcm_rb_acquire_read(&r->tap, &k, &buf) != MA_SUCCESS || !k) break;
+    memcpy(data + (size_t)got * r->tap_ch, buf, (size_t)k * r->tap_ch * sizeof(float));
+    ma_pcm_rb_commit_read(&r->tap, k);
+    got += k;
+  }
+  NAPI_CALL(env, napi_create_typedarray(env, napi_float32_array, (size_t)n * r->tap_ch, buffer, 0, &out));
+  return out;
 }
 
 typedef struct {

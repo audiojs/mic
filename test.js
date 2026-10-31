@@ -429,6 +429,19 @@ if (!isBrowser) {
     if (ffprobe) is(+probe(c).channels, 3, 'ffprobe: three channels')
   })
 
+  test('record: read(): the audio as it is written, the same as the file, sample for sample', { skip: none }, async () => {
+    const path = join(dir, 'read.wav'), take = record(path, { bitDepth: 32, channels: [1] }), got = []
+    await heard(take)
+    for (const t0 = performance.now(); performance.now() - t0 < 800;) { got.push(take.read()); await sleep(30) }
+    const end = await take.stop()
+    got.push(take.read())
+    const all = new Float32Array(got.reduce((n, x) => n + x.length, 0)), w = wav(path)
+    got.reduce((at, x) => (all.set(x, at), at + x.length), 0)
+    is([all.length, end.missed], [end.frames, 0], 'every frame, none missed')
+    const file = new Float32Array(w.audio.buffer.slice(w.audio.byteOffset, w.audio.byteOffset + w.audio.length))
+    ok(file.length === all.length && file.every((x, i) => Object.is(x, all[i])), 'the same samples as the file')
+  })
+
   test('record: no files: every input\'s level, nothing written', { skip: none }, async () => {
     const watch = record({})
     is(watch.files, [])

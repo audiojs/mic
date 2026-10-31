@@ -35,7 +35,6 @@
     }                                                                 \
   } while (0)
 
-#include "record.h"
 
 /* Mic instance */
 typedef struct {
@@ -385,11 +384,6 @@ static napi_value init(napi_env env, napi_value exports) {
     { "readSync",  NULL, mic_read_sync,  NULL, NULL, NULL, napi_default, NULL },
     { "readAsync", NULL, mic_read_async, NULL, NULL, NULL, napi_default, NULL },
     { "close",     NULL, mic_close,      NULL, NULL, NULL, napi_default, NULL },
-    { "record",       NULL, rec_open,   NULL, NULL, NULL, napi_default, NULL },
-    { "recordInfo",   NULL, rec_info,   NULL, NULL, NULL, napi_default, NULL },
-    { "recordStatus", NULL, rec_status, NULL, NULL, NULL, napi_default, NULL },
-    { "recordStop",   NULL, rec_stop,   NULL, NULL, NULL, napi_default, NULL },
-    { "recordRead",   NULL, rec_read,   NULL, NULL, NULL, napi_default, NULL },
   };
   NAPI_CALL(env, napi_define_properties(env, exports, sizeof props / sizeof *props, props));
   return exports;

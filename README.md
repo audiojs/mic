@@ -50,6 +50,38 @@ let read = mic({ device: 'USB' })   // by id, by name, or by part of its name wh
 
 Ids are the platform's own: CoreAudio's UID, WASAPI's endpoint id, the ALSA or PulseAudio name. A device that isn't there is an error (`code: 'ENODEVICE'`), never another device. In the browser, `devices()` reads `enumerateDevices()` (names show once the page may use the microphone) and `device` becomes the `deviceId` getUserMedia asks for.
 
+### Record to disk
+
+```js
+import { record } from '@audio/mic'
+
+let take = record('take.wav', { device: 'Scarlett', channels: [1, 2] })   // inputs from 1, as the interface labels them
+take.status()          // { seconds, peaks, clips, silenced, stalled, rerouted, done, error }: peaks since the last call
+await take.stop()      // the same, once the file is closed
+
+// several files from one device, one clock: tracks of one take, sample for sample together
+record({ 'voice.wav': [1], 'guitar.wav': [2], 'room.wav': [3, 4] }, { device: 'Scarlett' })
+
+// no files: every input's level, nothing written, to set levels before recording
+record({}, { device: 'Scarlett' }).status().peaks
+```
+
+The addon writes the file itself, from a ring of 20 s the device fills, so nothing in JS reaches the take: an event loop held for minutes, a crash, a kill. The device runs at its own rate and gives float; nothing is resampled unless `sampleRate` asks for another rate, and then the device switches to it (on macOS, as Audio MIDI Setup would).
+
+- **On disk as it comes.** Every second the header tells the length so far and the file is flushed to the disk itself (`F_FULLFSYNC` on macOS, where `fsync` stops at the drive's cache). A process killed or a power cut leaves a WAV that plays to its last second; `recover(path)` gives it the rest. `process.exit()` and an ending environment close it whole.
+- **Nothing lost quietly.** Frames the ring had no room for (a disk stalled 20 s) are written as silence where they were, so the take keeps time, and counted in `silenced`. A device that stops, unplugged, ends the take with `error.code === 'EDEVICELOST'`, written to its last frame; seconds without audio from it read as `stalled`; the system moving its default input elsewhere counts in `rerouted`.
+- **Never over a take.** A file already there is an error (`EEXIST`) unless `overwrite: true`; an input the device lacks is `ECHANNEL`; either before anything is written.
+- **WAV as every program reads it**: PCM 16-bit (TPDF-dithered) or 24-bit, or 32-bit float; `WAVE_FORMAT_EXTENSIBLE` over two channels; past 4 GB the header turns RF64 in place (EBU Tech 3306), into the JUNK chunk kept for it.
+
+On macOS an input opened while the system still asks for the microphone permission waits for the answer, and the thread that opened it with it: an app asks first (`AVCaptureDevice.requestAccess`), and opens an input once it is answered.
+
+Options: `device`, `channels` (inputs, default the first two or the one), `bitDepth` (`16`, `24` (default), `32`), `sampleRate` (default the device's own), `ring` (seconds, default 20), `overwrite`. The take tells `sampleRate`, `channels` (the device's), `device` (its name) and `files` (`[{ path, channels }]`).
+
+```js
+import { recover } from '@audio/mic'
+recover('take.wav')    // → { frames, before }: the frames the file holds, and those its header told
+```
+
 ### Node Readable
 
 ```js
@@ -87,7 +119,7 @@ Returns a source function. Options:
 
 Read PCM data. Callback fires with each captured chunk: `(err, buffer) => {}`.
 
-Capture doesn't wait for reads: what comes between them is held, and the next read takes all of it in one buffer, so a reader that takes its time loses nothing. Past `backlog` held unread, capture stops: what was held still reads, then an error with `code: 'EOVERFLOW'`, then the end (`null`). In node the device's own ring holds what comes while the event loop is busy, `backlog`'s worth up to 2 s, and overflows the same way.
+Capture doesn't wait for reads: what comes between them is held, and the next read takes all of it in one buffer, so a reader that takes its time loses nothing. Past `backlog` held unread, capture stops: what was held still reads, then an error with `code: 'EOVERFLOW'`, then the end (`null`). In node the device's own ring holds what comes while the event loop is busy, `backlog`'s worth up to 2 s, and overflows the same way. A device that stops of itself (unplugged) ends it the same way, with `code: 'EDEVICELOST'`.
 
 ### `read(null)`
 

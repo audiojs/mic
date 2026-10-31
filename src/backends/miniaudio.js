@@ -34,6 +34,9 @@ for (const load of loaders) {
 }
 if (!addon) throw new Error('miniaudio addon not found — install @audio/mic-' + plat + ' or run npm run build')
 
+/** The addon itself: recording to disk (src/record.js) speaks to it directly */
+export { addon }
+
 /** The inputs: [{ id, name, default }], ids the platform's own (CoreAudio's UID, WASAPI's endpoint id, ALSA's name) */
 export const devices = () => addon.devices?.() ?? []
 

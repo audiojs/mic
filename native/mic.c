@@ -35,6 +35,8 @@
     }                                                                 \
   } while (0)
 
+#include "record.h"
+
 /* Mic instance */
 typedef struct {
   ma_device device;
@@ -45,6 +47,7 @@ typedef struct {
   int started;
   volatile int closed;
   ma_uint32 overflow;  /* the ring was full: from then on nothing is kept, so what it holds stays contiguous */
+  ma_uint32 lost;      /* the device stopped of itself (unplugged): what the ring holds reads, then EDEVICELOST */
 } mic_t;
 
 /* Async read work */
@@ -54,6 +57,7 @@ typedef struct {
   size_t byte_length;
   ma_uint32 frames_read;
   int overflow;
+  int lost;
   napi_async_work work;
   napi_ref callback_ref;
   napi_ref buffer_ref;
@@ -77,6 +81,12 @@ static void capture_callback(ma_device* device, void* output, const void* input,
   if (total_written < frame_count) ma_atomic_store_32(&mic->overflow, 1);
 
   (void)output;
+}
+
+/* the device stopped, and not by close(): a read waiting for it would wait for ever */
+static void mic_notify(const ma_device_notification* n) {
+  mic_t* mic = (mic_t*)n->pDevice->pUserData;
+  if (n->type == ma_device_notification_type_stopped && !mic->closed) ma_atomic_store_32(&mic->lost, 1);
 }
 
 /* GC destructor */
@@ -163,6 +173,7 @@ static napi_value mic_open(napi_env env, napi_callback_info info) {
   if (chosen) config.capture.pDeviceID = &id;
   config.sampleRate = sample_rate;
   config.dataCallback = capture_callback;
+  config.notificationCallback = mic_notify;
   config.pUserData = mic;
   config.performanceProfile = ma_performance_profile_low_latency;
 
@@ -252,7 +263,7 @@ static void read_execute(napi_env env, void* data) {
    * This gives lowest latency: callback fires as soon as any data is captured. */
   while (frames_read == 0 && !mic->closed) {
     /* the flag before the ring: once set, nothing more is written, so the ring empty then means the overflow is next */
-    ma_uint32 over = ma_atomic_load_32(&mic->overflow);
+    ma_uint32 over = ma_atomic_load_32(&mic->overflow), lost = ma_atomic_load_32(&mic->lost);
     ma_uint32 to_read = max_frames - frames_read;
     void* read_buf;
     ma_result res = ma_pcm_rb_acquire_read(&mic->ring_buffer, &to_read, &read_buf);
@@ -262,6 +273,9 @@ static void read_execute(napi_env env, void* data) {
       frames_read += to_read;
     } else if (over) {
       w->overflow = 1;
+      break;
+    } else if (lost) {
+      w->lost = 1;
       break;
     } else {
       ma_sleep(1);
@@ -283,6 +297,11 @@ static void read_complete(napi_env env, napi_status status, void* data) {
     napi_value code, msg;
     napi_create_string_utf8(env, "EOVERFLOW", NAPI_AUTO_LENGTH, &code);
     napi_create_string_utf8(env, "mic: the event loop was held longer than the device ring holds; capture stopped", NAPI_AUTO_LENGTH, &msg);
+    napi_create_error(env, code, msg, &argv[0]);
+  } else if (w->lost) {
+    napi_value code, msg;
+    napi_create_string_utf8(env, "EDEVICELOST", NAPI_AUTO_LENGTH, &code);
+    napi_create_string_utf8(env, "mic: the input device stopped (unplugged?); capture ended", NAPI_AUTO_LENGTH, &msg);
     napi_create_error(env, code, msg, &argv[0]);
   } else {
     napi_get_null(env, &argv[0]);
@@ -366,8 +385,12 @@ static napi_value init(napi_env env, napi_value exports) {
     { "readSync",  NULL, mic_read_sync,  NULL, NULL, NULL, napi_default, NULL },
     { "readAsync", NULL, mic_read_async, NULL, NULL, NULL, napi_default, NULL },
     { "close",     NULL, mic_close,      NULL, NULL, NULL, napi_default, NULL },
+    { "record",       NULL, rec_open,   NULL, NULL, NULL, napi_default, NULL },
+    { "recordInfo",   NULL, rec_info,   NULL, NULL, NULL, napi_default, NULL },
+    { "recordStatus", NULL, rec_status, NULL, NULL, NULL, napi_default, NULL },
+    { "recordStop",   NULL, rec_stop,   NULL, NULL, NULL, napi_default, NULL },
   };
-  NAPI_CALL(env, napi_define_properties(env, exports, 5, props));
+  NAPI_CALL(env, napi_define_properties(env, exports, sizeof props / sizeof *props, props));
   return exports;
 }
 

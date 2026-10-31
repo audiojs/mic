@@ -13,6 +13,9 @@ const backends = [
   null_ && { name: 'null', open: null_.open, devices: null_.devices },
 ].filter(Boolean)
 
+/** The native addon, where there is one: what records to disk */
+export const addon = () => miniaudio?.addon
+
 /** The first backend's inputs that can list them: [{ id, name, default }] */
 export function devices(preference) {
   for (const b of preference ? backends.filter(b => b.name === preference) : backends) {

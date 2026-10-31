@@ -6,8 +6,11 @@
  * read((err, chunk) => {})
  * read(null) // stop
  */
-import { open, devices as list } from './src/backend.js'
+import { open, devices as list, addon } from './src/backend.js'
 import queue, { iterator, overflow } from './src/queue.js'
+import { record as write } from './src/record.js'
+
+export { recover } from './src/record.js'
 
 const defaults = {
   sampleRate: 44100,
@@ -26,6 +29,14 @@ export function pick(all, device) {
   let d = String(device), lower = d.toLowerCase()
   let hit = all.find(x => x.id === d || x.name === d), some = hit ? [] : all.filter(x => x.name.toLowerCase().includes(lower))
   return (hit ?? (some.length === 1 ? some[0] : null))?.id ?? d
+}
+
+/**
+ * Record to WAV files, written by the addon as the audio comes: `to` a path, or { path: inputs } for several at once
+ * (inputs count from 1). → { sampleRate, channels, device, files, status(), stop() }
+ */
+export function record(to, opts = {}) {
+  return write(addon(), to, { ...opts, device: pick(list(opts.backend), opts.device) })
 }
 
 export default function mic(opts) {

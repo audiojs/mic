@@ -337,6 +337,12 @@ if (!isBrowser) {
   process.once('exit', () => rmSync(dir, { recursive: true, force: true }))
   const none = !(await devices()).length && 'no input device'
   const sleep = ms => new Promise(r => setTimeout(r, ms))
+  // the device's first `frames`, however long a runner's device takes to start (5 s at most), then `ms` more: a test
+  // about the file, not about how soon a device starts
+  const heard = async (take, ms = 0, frames = 1) => {
+    for (const t0 = performance.now(); take.status().frames < frames && performance.now() - t0 < 5000;) await sleep(10)
+    await sleep(ms)
+  }
   const has = cmd => { try { execFileSync('which', [cmd], { stdio: 'ignore' }); return true } catch { return false } }
   // the references: Apple's AudioFile (afinfo) and FFmpeg (ffprobe) read the files as any other program would
   const afinfo = process.platform === 'darwin' && has('afinfo'), ffprobe = has('ffprobe')
@@ -376,7 +382,7 @@ if (!isBrowser) {
     ok(take.sampleRate > 0 && take.channels > 0, `${take.device}: ${take.channels} in at ${take.sampleRate} Hz`)
     is(take.deviceRate, take.sampleRate, 'the device\'s own rate: nothing resampled')
     is(take.files, [{ path, channels: take.channels > 1 ? [1, 2] : [1] }])
-    await sleep(1500)
+    await heard(take, 1500)
     const mid = take.status(), head = wav(path)
     ok(mid.frames > 0 && !mid.done && !mid.error, `${mid.seconds.toFixed(2)} s written while recording`)
     is(mid.peaks.length, take.channels, 'a peak for each input')
@@ -398,7 +404,7 @@ if (!isBrowser) {
   test('record: 16-bit (dithered), 24-bit, 32-bit float', { skip: none }, async () => {
     for (const [bitDepth, codec, tag] of [[16, 'pcm_s16le', 1], [24, 'pcm_s24le', 1], [32, 'pcm_f32le', 3]]) {
       const path = join(dir, `bits${bitDepth}.wav`), take = record(path, { bitDepth, channels: [1] })
-      await sleep(400)
+      await heard(take, 400)
       const end = await take.stop(), w = wav(path)
       is([w.tag, w.bits, w.block, w.data], [tag, bitDepth, bitDepth / 8, end.frames * bitDepth / 8], `${bitDepth}-bit: header`)
       if (bitDepth === 32) is(w.fact, end.frames, 'float: fact tells the frames')
@@ -410,7 +416,7 @@ if (!isBrowser) {
     const a = join(dir, 'a.wav'), b = join(dir, 'b.wav'), c = join(dir, 'c.wav')
     const take = record({ [a]: 1, [b]: [1, 1], [c]: [1, 1, 1] })
     is(take.files.map(f => f.channels), [[1], [1, 1], [1, 1, 1]])
-    await sleep(800)
+    await heard(take, 800)
     const end = await take.stop(), wa = wav(a), wb = wav(b), wc = wav(c)
     is([wa.data / 3, wb.data / 6, wc.data / 9], [end.frames, end.frames, end.frames], 'each: every frame')
     is(wc.tag, 0xFFFE, 'three channels: WAVE_FORMAT_EXTENSIBLE')
@@ -426,7 +432,7 @@ if (!isBrowser) {
   test('record: no files: every input\'s level, nothing written', { skip: none }, async () => {
     const watch = record({})
     is(watch.files, [])
-    await sleep(500)
+    await heard(watch, 500)
     const s = watch.status()
     ok(s.frames > 0 && s.peaks.length === watch.channels, `${s.frames} frames heard, ${s.peaks.length} levels`)
     const end = await watch.stop()
@@ -489,7 +495,7 @@ if (!isBrowser) {
 
   test('record: past 4 GB RIFF turns RF64 in place (rf64At brings 4 GB near)', { skip: none }, async () => {
     const path = join(dir, 'long.wav'), take = record(path, { channels: [1], rf64At: 4096 })
-    await sleep(1500)
+    await heard(take, 1500, 2048)   // 6 KB of audio at least: past rf64At
     const end = await take.stop(), w = wav(path)
     is([w.id, w.riff], ['RF64', 0xFFFFFFFF], 'RF64, its RIFF size -1')
     is([w.riff64, w.data64, w.samples64], [w.size - 8, end.frames * 3, end.frames], 'ds64: the sizes')
